@@ -1,0 +1,24 @@
+# macOS
+.DS_Store
+
+# Editor / tooling
+.vscode/
+.idea/
+
+# C build artifacts
+*.o
+*.d
+*.elf
+*.bin
+*.map
+
+# Common build folders
+bin/
+build/
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs
+*.log
