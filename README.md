@@ -1,6 +1,6 @@
 # LED Panel Pong + Browser Emulator (CS132 Coursework)
 
-This repository contains a Pong-style game written in C for a **32×32 RGB LED matrix** (driven as a multiplexed, shift-register-based panel) and—most importantly—a **browser emulator** that lets you run and debug the same embedded game logic without hardware.
+This repository contains a Pong-style game written in C for a **32×32 RGB LED matrix** (driven as a multiplexed, shift-register-based panel) an most importantl a **browser emulator** that lets you run and debug the same embedded game logic without hardware.
 
 The emulator is the “unique” part of the coursework: it faithfully emulates the panel’s **bitstream protocol** (shift + latch + row address) and maps joystick input to ADC-like readings, so the original game code can run unchanged.
 
