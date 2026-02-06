@@ -1,0 +1,509 @@
+<!doctype html>
+<!--
+  index.html
+
+  What this file does
+  -------------------
+  This is the single web page that hosts the Pong LED-panel emulator.
+
+  Key components
+  --------------
+  1) 32x32 LED panel display
+     - A <canvas id="panel"> element is configured to a *logical* resolution of 32x32.
+     - CSS scales the canvas up so each logical pixel appears as a large "LED".
+     - emulator.js receives frame callbacks from the WASM code and writes pixels into this canvas.
+
+  2) Joystick input UI
+     - Two sliders represent the vertical axis of the left and right joysticks.
+     - Keyboard input and on-screen ▲/▼ buttons move the sliders smoothly and auto-return to centre.
+     - emulator.js reads the slider positions via the EmuUI API and exposes them to the WASM game
+       through getRawInput(channel).
+
+  3) Runtime controls
+     - Start / Pause / Step / Reset buttons control the emulated timing behaviour.
+     - panel_emu.c's delay_ms() reads pause/step state via emulator.js so the browser remains responsive.
+
+  4) Logging
+     - stdout/stderr from the WASM program are routed into the on-page "Console" panel.
+
+  Loading order
+  -------------
+  - emulator.js must load before pong.js so that window.Emu exists before the WASM runtime initialises.
+  - pong.js is produced by Emscripten (emcc) and loads the accompanying pong.wasm.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pong LED Panel Emulator (32×32)</title>
+
+  <style>
+    /*
+      Layout overview
+      ---------------
+      - A two-column grid:
+          left  = the large LED panel
+          right = joystick controls + console
+      - Below 980px width we switch to a single column.
+
+      The CSS is intentionally straightforward: a small set of colours, a simple "card" style,
+      and a pixelated canvas so 32x32 pixels remain crisp when scaled.
+    */
+
+    /* --- Global page styling --- */
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      background: #0b0e14;
+      color: #e5e7eb;
+    }
+
+    /* --- Main two-column layout --- */
+    .wrap {
+      width: min(1600px, 100%);
+      margin: 0 auto;
+      padding: 18px;
+      display: grid;
+      grid-template-columns: 2.2fr 1fr; /* panel larger */
+      gap: 16px;
+      align-items: start;
+    }
+
+    /* --- Generic card container --- */
+    .card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid #374151;
+      border-radius: 14px;
+      padding: 14px;
+    }
+
+    h1 {
+      font-size: 16px;
+      margin: 0 0 10px 0;
+      font-weight: 700;
+    }
+
+    /* --- Panel card --- */
+    .panelCard {
+      display: grid;
+      gap: 10px;
+    }
+
+    .panelTopBar {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .meta {
+      font-size: 12px;
+      color: #9ca3af;
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    /*
+      The canvas is *logically* 32x32 pixels (set by width/height attributes).
+      CSS scales it up while preserving hard pixel edges.
+    */
+    canvas#panel {
+      width: min(74vw, 82vh, 980px);
+      height: min(74vw, 82vh, 980px);
+      max-width: 100%;
+      aspect-ratio: 1 / 1;
+      background: #111827;
+      border: 1px solid #374151;
+      border-radius: 12px;
+      image-rendering: pixelated;
+      justify-self: center;
+    }
+
+    /* --- Button styling (shared by top controls and joystick ▲/▼ buttons) --- */
+    .controls {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      background: #1f2937;
+      color: #e5e7eb;
+      border: 1px solid #374151;
+      border-radius: 10px;
+      padding: 10px 12px;
+      cursor: pointer;
+      font-weight: 650;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+
+    button:hover {
+      background: #273244;
+    }
+
+    /* --- Right column --- */
+    .rightCol {
+      display: grid;
+      gap: 16px;
+    }
+
+    /* --- Joystick blocks --- */
+    .joyBlock {
+      display: grid;
+      gap: 10px;
+      padding: 10px;
+      border: 1px solid #374151;
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.18);
+    }
+
+    .joyHeader {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .joyTitle {
+      font-weight: 700;
+      font-size: 14px;
+    }
+
+    .joyKeys {
+      font-size: 12px;
+      color: #9ca3af;
+    }
+
+    .joyRow {
+      display: grid;
+      grid-template-columns: 42px 1fr 42px; /* ▲ slider ▼ */
+      gap: 10px;
+      align-items: center;
+    }
+
+    .joyBtn {
+      padding: 10px 0;
+      font-weight: 800;
+      text-align: center;
+    }
+
+    input[type="range"] {
+      width: 100%;
+    }
+
+    .small {
+      font-size: 12px;
+      color: #9ca3af;
+      line-height: 1.35;
+    }
+
+    /* --- On-page console --- */
+    pre#log {
+      margin: 0;
+      max-height: 280px;
+      overflow: auto;
+      font-size: 12px;
+      color: #9ca3af;
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid #374151;
+      border-radius: 12px;
+      padding: 10px;
+      white-space: pre-wrap;
+    }
+
+    kbd {
+      border: 1px solid #374151;
+      border-bottom-width: 2px;
+      border-radius: 6px;
+      padding: 2px 6px;
+      background: rgba(255, 255, 255, 0.04);
+      font-size: 12px;
+      color: #e5e7eb;
+    }
+
+    /* --- Mobile / narrow screens: single column --- */
+    @media (max-width: 980px) {
+      .wrap {
+        grid-template-columns: 1fr;
+      }
+
+      canvas#panel {
+        width: min(92vw, 86vh, 860px);
+        height: min(92vw, 86vh, 860px);
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <!-- LEFT: Panel -->
+    <div class="card panelCard">
+      <div class="panelTopBar">
+        <div>
+          <h1 style="margin-bottom:4px;">LED Panel (32×32)</h1>
+          <div class="meta">
+            <div>Runtime: <span id="runtimeState">loading…</span></div>
+            <div>Display: <span id="displayState">unknown</span></div>
+            <div>FPS: <span id="fps">—</span></div>
+          </div>
+        </div>
+
+        <div class="controls">
+          <button id="btnStart" type="button">Start</button>
+          <button id="btnPause" type="button">Pause</button>
+          <button id="btnStep" type="button">Step</button>
+          <button id="btnReset" type="button">Reset</button>
+        </div>
+      </div>
+
+      <!-- Logical resolution is 32×32; CSS scales it. -->
+      <canvas id="panel" width="32" height="32" aria-label="32 by 32 LED panel"></canvas>
+    </div>
+
+    <!-- RIGHT: Joysticks + Debug -->
+    <div class="rightCol">
+      <div class="card">
+        <h1>Joysticks</h1>
+
+        <div class="joyBlock">
+          <div class="joyHeader">
+            <div class="joyTitle">Left joystick</div>
+            <div class="joyKeys">Keyboard: <kbd>W</kbd> / <kbd>S</kbd></div>
+          </div>
+
+          <div class="joyRow">
+            <button id="leftUp" class="joyBtn" type="button" aria-label="Left joystick up">▲</button>
+            <input id="joyLeft" type="range" min="0" max="4095" value="2048" />
+            <button id="leftDown" class="joyBtn" type="button" aria-label="Left joystick down">▼</button>
+          </div>
+        </div>
+
+        <div class="joyBlock">
+          <div class="joyHeader">
+            <div class="joyTitle">Right joystick</div>
+            <div class="joyKeys">Keyboard: <kbd>↑</kbd> / <kbd>↓</kbd></div>
+          </div>
+
+          <div class="joyRow">
+            <button id="rightUp" class="joyBtn" type="button" aria-label="Right joystick up">▲</button>
+            <input id="joyRight" type="range" min="0" max="4095" value="2048" />
+            <button id="rightDown" class="joyBtn" type="button" aria-label="Right joystick down">▼</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h1>Console</h1>
+        <pre id="log"></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Define Module before loading pong.js (Emscripten default pattern). -->
+  <script>
+    (function () {
+      const consoleElement = document.getElementById('log');
+      const runtimeStateElement = document.getElementById('runtimeState');
+      const displayStateElement = document.getElementById('displayState');
+      const fpsElement = document.getElementById('fps');
+
+      /*
+        appendConsoleLine
+
+        Append a line of text to the on-page console and keep the scroll position at the bottom.
+
+        This is used for:
+          - stdout/stderr forwarded from Emscripten
+          - small runtime status messages
+      */
+      function appendConsoleLine(line) {
+        consoleElement.textContent += line + "\n";
+        consoleElement.scrollTop = consoleElement.scrollHeight;
+      }
+
+      // Expose a small UI API that emulator.js (and C->JS bridges) can call.
+      // The names of these methods are part of the integration contract, so they remain stable.
+      window.EmuUI = {
+        log: appendConsoleLine,
+        setRuntimeState: (stateText) => (runtimeStateElement.textContent = stateText),
+        setDisplayEnabled: (isEnabled) => (displayStateElement.textContent = isEnabled ? "on" : "off"),
+        setFps: (fpsText) => (fpsElement.textContent = fpsText),
+        getLeftADC: () => Number(document.getElementById('joyLeft').value) | 0,
+        getRightADC: () => Number(document.getElementById('joyRight').value) | 0,
+      };
+
+      // Emscripten will read window.Module if present.
+      window.Module = {
+        print: (text) => appendConsoleLine(String(text)),
+        printErr: (text) => appendConsoleLine("[err] " + String(text)),
+
+        /*
+          onAbort
+
+          Emscripten calls this if the runtime aborts. We reflect that state in the UI and also
+          log the abort reason.
+        */
+        onAbort: (what) => {
+          window.EmuUI.setRuntimeState("aborted");
+          appendConsoleLine("[abort] " + what);
+        },
+
+        /*
+          onRuntimeInitialized
+
+          Emscripten calls this when the WASM module is ready. We mark the runtime as ready and
+          notify emulator.js via Emu.onWasmReady(Module).
+        */
+        onRuntimeInitialized: () => {
+          window.EmuUI.setRuntimeState("ready");
+
+          if (window.Emu && typeof window.Emu.onWasmReady === "function") {
+            window.Emu.onWasmReady(window.Module);
+          } else {
+            appendConsoleLine("[warn] Emu.onWasmReady missing (check emulator.js load order).");
+          }
+        }
+      };
+    })();
+  </script>
+
+  <!-- Input handling for sliders: keyboard + hold buttons. -->
+  <script>
+    (function () {
+      const leftJoystickSlider = document.getElementById('joyLeft');
+      const rightJoystickSlider = document.getElementById('joyRight');
+
+      // Track which virtual buttons/keys are currently held.
+      const joystickHoldState = {
+        leftUp: false,
+        leftDown: false,
+        rightUp: false,
+        rightDown: false,
+      };
+
+      const SLIDER_CENTER = 2048;
+      const MOVE_STEP_PER_FRAME = 120;        // movement per animation frame while held
+      const RETURN_STEP_PER_FRAME = 90;       // return-to-centre per animation frame
+
+      /*
+        clampSliderValue
+
+        Ensure slider values always remain within the valid ADC range (0..4095).
+      */
+      function clampSliderValue(value) {
+        if (value < 0) return 0;
+        if (value > 4095) return 4095;
+        return value;
+      }
+
+      /*
+        approachValue
+
+        Move "current" toward "target" by up to "delta" each call, without overshooting.
+
+        This is used to smoothly return the slider to centre when no input is held.
+      */
+      function approachValue(current, target, delta) {
+        if (current < target) return Math.min(current + delta, target);
+        if (current > target) return Math.max(current - delta, target);
+        return current;
+      }
+
+      /*
+        updateJoystickSlidersLoop
+
+        Animation-frame loop that:
+          - applies held keyboard/button input to move the joystick sliders,
+          - auto-centres the sliders when no input is held,
+          - updates the slider DOM values.
+
+        The game reads joystick values on demand; this loop simply keeps the UI responsive and
+        continuous.
+      */
+      function updateJoystickSlidersLoop() {
+        // Left joystick: W/S or on-screen ▲/▼
+        let leftValue = Number(leftJoystickSlider.value) | 0;
+        if (joystickHoldState.leftUp) leftValue = clampSliderValue(leftValue - MOVE_STEP_PER_FRAME);
+        if (joystickHoldState.leftDown) leftValue = clampSliderValue(leftValue + MOVE_STEP_PER_FRAME);
+        if (!joystickHoldState.leftUp && !joystickHoldState.leftDown) {
+          leftValue = approachValue(leftValue, SLIDER_CENTER, RETURN_STEP_PER_FRAME);
+        }
+        leftJoystickSlider.value = String(leftValue);
+
+        // Right joystick: arrows or on-screen ▲/▼
+        let rightValue = Number(rightJoystickSlider.value) | 0;
+        if (joystickHoldState.rightUp) rightValue = clampSliderValue(rightValue - MOVE_STEP_PER_FRAME);
+        if (joystickHoldState.rightDown) rightValue = clampSliderValue(rightValue + MOVE_STEP_PER_FRAME);
+        if (!joystickHoldState.rightUp && !joystickHoldState.rightDown) {
+          rightValue = approachValue(rightValue, SLIDER_CENTER, RETURN_STEP_PER_FRAME);
+        }
+        rightJoystickSlider.value = String(rightValue);
+
+        requestAnimationFrame(updateJoystickSlidersLoop);
+      }
+
+      /*
+        Keyboard mapping
+
+        - Left joystick:  W = up, S = down
+        - Right joystick: Up Arrow = up, Down Arrow = down
+      */
+      window.addEventListener('keydown', (e) => {
+        if (e.code === 'KeyW') joystickHoldState.leftUp = true;
+        if (e.code === 'KeyS') joystickHoldState.leftDown = true;
+        if (e.code === 'ArrowUp') joystickHoldState.rightUp = true;
+        if (e.code === 'ArrowDown') joystickHoldState.rightDown = true;
+      });
+
+      window.addEventListener('keyup', (e) => {
+        if (e.code === 'KeyW') joystickHoldState.leftUp = false;
+        if (e.code === 'KeyS') joystickHoldState.leftDown = false;
+        if (e.code === 'ArrowUp') joystickHoldState.rightUp = false;
+        if (e.code === 'ArrowDown') joystickHoldState.rightDown = false;
+      });
+
+      /*
+        bindHoldButton
+
+        Attach pointer event handlers to an on-screen ▲/▼ button so it behaves like a "hold" key:
+          - pointerdown sets the corresponding joystickHoldState flag
+          - pointerup/cancel/leave clears the flag
+
+        This works for both mouse and touch input.
+      */
+      function bindHoldButton(buttonId, holdFlagName) {
+        const button = document.getElementById(buttonId);
+        const setFlag = (v) => { joystickHoldState[holdFlagName] = v; };
+
+        button.addEventListener('pointerdown', () => {
+          button.setPointerCapture?.(event.pointerId);
+          setFlag(true);
+        });
+
+        button.addEventListener('pointerup', () => setFlag(false));
+        button.addEventListener('pointercancel', () => setFlag(false));
+        button.addEventListener('pointerleave', () => setFlag(false));
+      }
+
+      bindHoldButton('leftUp', 'leftUp');
+      bindHoldButton('leftDown', 'leftDown');
+      bindHoldButton('rightUp', 'rightUp');
+      bindHoldButton('rightDown', 'rightDown');
+
+      requestAnimationFrame(updateJoystickSlidersLoop);
+    })();
+  </script>
+
+  <!-- Load the emulator glue first so window.Emu exists before the WASM runtime initialises. -->
+  <script src="emulator.js"></script>
+
+  <!-- Load the Emscripten output (produced by: emcc ... -o pong.js). -->
+  <script src="pong.js"></script>
+</body>
+</html>
