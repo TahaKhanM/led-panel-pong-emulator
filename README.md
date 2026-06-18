@@ -4,6 +4,8 @@ This repository contains a Pong-style game written in C for a **32×32 RGB LED m
 
 The emulator is the “unique” part of the coursework: it faithfully emulates the panel’s **bitstream protocol** (shift + latch + row address) and maps joystick input to ADC-like readings, so the original game code can run unchanged.
 
+Portfolio role: this is a systems/C project showing hardware abstraction, low-level state management, rendering/input loops and a browser emulator for faster debugging.
+
 ## Quick start (browser emulator)
 
 ### 1) Build (Emscripten)
@@ -37,6 +39,16 @@ Controls:
 - Right paddle: **↑ / ↓** (or on-screen ▲/▼)
 - Toggle scan visualisation: **L** (integrated view ↔ active row-pair debug view)
 - Pause/Step: buttons on the page (space also toggles pause)
+
+## Quick verification without Emscripten
+
+If Emscripten is not installed, the shared C sources can still be syntax-checked with a local compiler:
+
+```bash
+cc -fsyntax-only src/game.c emulator/src/panel_emu.c
+```
+
+The full browser build still requires `emcc`.
 
 ## What makes the emulator interesting
 
