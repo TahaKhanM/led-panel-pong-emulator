@@ -18,7 +18,8 @@ command -v emcc >/dev/null 2>&1 || {
 emcc \
   "$ROOT_DIR/src/game.c" \
   "$ROOT_DIR/emulator/src/panel_emu.c" \
-  -O2 \
+  -I"$ROOT_DIR/src" \
+  -std=c11 -Wall -Wextra -Werror -O2 \
   -sASYNCIFY \
   -sALLOW_MEMORY_GROWTH \
   -o "$ROOT_DIR/emulator/web/pong.js"
