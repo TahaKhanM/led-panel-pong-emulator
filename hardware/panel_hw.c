@@ -1,7 +1,7 @@
 #include "libopencm3/stm32/rcc.h"  //Needed to enable the clock
 #include "libopencm3/stm32/gpio.h" //Needed to define things on the GPIO
 #include "libopencm3/stm32/adc.h"  //Needed to convert analogue signals to digital
-#include <unistd.h>
+#include "panel.h"
 
 #define LEDPANEL_PORT GPIOC
 
@@ -106,7 +106,7 @@ void ClearRow(int row)
   }
 }
 
-void setupPanel()
+void setupPanel(void)
 {
   rcc_periph_clock_enable(RCC_GPIOA); // Enable clock
   rcc_periph_clock_enable(RCC_GPIOC); // Enable clock
@@ -145,7 +145,7 @@ void setupPanel()
 }
 
 // Function to configure GPIO registers
-void setupInput()
+void setupInput(void)
 {
   rcc_periph_clock_enable(RCC_ADC12); // Enable clock for ADC registers 1 and 2
 

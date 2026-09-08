@@ -1,24 +1,7 @@
-# macOS
 .DS_Store
-
-# Editor / tooling
-.vscode/
-.idea/
-
-# C build artifacts
+build/
 *.o
-*.d
 *.elf
 *.bin
-*.map
-
-# Common build folders
-bin/
-build/
-
-# Python
-__pycache__/
-*.pyc
-
-# Logs
-*.log
+emulator/web/pong.js
+emulator/web/pong.wasm

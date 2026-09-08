@@ -1,143 +1,65 @@
-# LED Panel Pong + Browser Emulator (CS132 Coursework)
+# LED-panel Pong and browser emulator
 
-This repository contains a Pong-style game written in C for a **32×32 RGB LED matrix** (driven as a multiplexed, shift-register-based panel) and most importantly a **browser emulator** that lets you run and debug the same embedded game logic without hardware.
+A two-player Pong game in C, with a browser emulator that runs the same game and scanout code through WebAssembly. The useful engineering boundary is the **serial panel protocol**: the game emits bits, selects a row and latches a register; the browser displays the resulting pixels. That makes bit ordering, row selection and incomplete register updates directly inspectable.
 
-The emulator is the “unique” part of the coursework: it faithfully emulates the panel’s **bitstream protocol** (shift + latch + row address) and maps joystick input to ADC-like readings, so the original game code can run unchanged.
+**[Play the browser demo](https://tahakhanm.github.io/led-panel-pong-emulator/)** · [Coursework report](docs/CS132_Report_Draft_2.pdf) · [Native regression tests](tests/)
 
-## Quick start (browser emulator)
+The original CS132 coursework report is credited to **Serena Jacob and Taha Khan**. The kit and exercise came from the course; [the lab handout](docs/CS132_LED_Panel.pdf) credits A. Hague and R. Suma, adapted from R. Kirk. The shared game, browser port and repository are the implementation under review. The report does not give a precise per-person division of the implementation, so this should be presented as collaborative work.
 
-### 1) Build (Emscripten)
+## Play or build
 
-You need Emscripten (`emcc`) on your PATH.
+Hold **W and ↑ together** to leave the start screen. The left paddle uses **W/S**, the right uses **↑/↓**; on-screen buttons and sliders provide equivalent input. After a point, move the serving paddle to serve. First to ten wins.
 
-```bash
-./emulator/scripts/build_web.sh
-```
+- **Pause / Resume** or Space when the page body is focused, controls execution.
+- **Step row** advances one scan boundary while paused; it is not one whole game frame.
+- **L** switches between the integrated display and the currently addressed row pair.
+- **Reset** reloads the program.
 
-This compiles:
-- `src/game.c` (game logic + scanout)
-- `emulator/src/panel_emu.c` (Web/WASM HAL)
-
-…and produces:
-- `emulator/web/pong.js`
-- `emulator/web/pong.wasm`
-
-(Compile flags match the project write-up: `-O2 -sASYNCIFY -sALLOW_MEMORY_GROWTH`.)
-
-### 2) Run
+Build locally with an activated Emscripten SDK providing `emcc`, Python 3 and a C compiler:
 
 ```bash
+make test
+make web
 ./emulator/scripts/serve.sh
 ```
 
-Then open `http://localhost:8000` in a browser.
+Open `http://127.0.0.1:8000`. Serving checks that both generated files exist; opening the HTML directly from disk is insufficient for loading WASM. The browser bridge can also be checked with `node tests/test_browser.js`.
 
-Controls:
-- Left paddle: **W / S** (or on-screen ▲/▼)
-- Right paddle: **↑ / ↓** (or on-screen ▲/▼)
-- Toggle scan visualisation: **L** (integrated view ↔ active row-pair debug view)
-- Pause/Step: buttons on the page (space also toggles pause)
+`make web` compiles `src/game.c` and `emulator/src/panel_emu.c`, adding the shared header path and enabling Asyncify. It produces `emulator/web/pong.js` and `pong.wasm`; generated binaries are ignored rather than committing an incomplete JavaScript artifact without its matching WASM. GitHub Actions runs the native and JavaScript checks, builds with Emscripten and publishes the static demo.
 
-## What makes the emulator interesting
+## How the layers fit
 
-Most “embedded emulators” cheat by exposing a framebuffer API (“draw pixel x,y”). This emulator is deliberately lower-level: it reproduces the exact update protocol the physical panel expects.
-
-### The HAL boundary (`panel.h`)
-
-`src/panel.h` defines the hardware abstraction layer (HAL) used by the game:
-
-- Panel output primitives: `PrepareLatch`, `PushBit`, `SelectRow`, `LatchRegister`, `ClearRow`
-- Input/timing: `getRawInput`, `delay_ms`, plus `setupPanel` / `setupInput`
-
-The game code (`src/game.c`) only calls these functions. At build time, you pick one implementation:
-
-- **Hardware target:** `hardware/panel_hw.c` (STM32 GPIO + ADC via libopencm3)
-- **Web target:** `emulator/src/panel_emu.c` (WASM + JavaScript rendering/input)
-
-### Faithful panel emulation (`panel_emu.c`)
-
-The physical 32×32 panel is refreshed as **two 16-row halves** (row-pairs). For each row-pair, the game shifts **192 bits**:
-
-- Top half (row `r`): 32×(R,G,B) = 96 bits
-- Bottom half (row `r+16`): 32×(R,G,B) = 96 bits
-- Total: 192 bits per row-pair
-
-`panel_emu.c` emulates that behaviour explicitly:
-
-1. **Shift register model**: stores the most recent 192 pushed bits (like a fixed-length register chain).
-2. **Latch commit** (`LatchRegister`): decodes those 192 bits into a 32×32 RGB framebuffer (1-bit per channel).
-3. **Render callback**: calls `window.Emu.renderFrame(...)` so JavaScript can draw the framebuffer to a canvas.
-
-Timing is also made “browser-safe”: `delay_ms()` uses `emscripten_sleep()` (enabled by `-sASYNCIFY`) so the UI stays responsive and it honours Pause/Step controls.
-
-### JavaScript glue (`emulator.js` + `index.html`)
-
-- `emulator/web/index.html` hosts the UI (canvas, sliders, buttons) and wires Emscripten stdout/stderr into an on-page console.
-- `emulator/web/emulator.js` implements:
-  - `window.Emu.renderFrame(ptr, row, on)` → reads WASM memory and draws the 32×32 canvas
-  - `window.Emu.getAdc(channel)` → converts slider/keyboard state into ADC-like values
-  - pause/step state queried by `panel_emu.c`
-
-A useful debugging feature is the **row-scan view** (`L` key): instead of drawing the whole integrated framebuffer, the page can show only the currently selected row-pair. This makes scan-order and latch timing issues much easier to see.
-
-## Repository layout
-
-```
-.
-├─ src/                     # shared code (runs on both targets)
-│  ├─ game.c
-│  └─ panel.h
-├─ emulator/                # browser emulator target (the focus)
-│  ├─ src/
-│  │  └─ panel_emu.c
-│  ├─ web/
-│  │  ├─ index.html
-│  │  ├─ emulator.js
-│  │  └─ pong.js            # Emscripten output (pong.wasm generated alongside)
-│  └─ scripts/
-│     ├─ build_web.sh
-│     └─ serve.sh
-├─ hardware/                # STM32 target (coursework hardware build)
-│  ├─ panel_hw.c
-│  └─ Makefile
-└─ docs/
-   ├─ CS132_Report_Draft_2.pdf
-   └─ CS132_LED_Panel.pdf
+```mermaid
+flowchart LR
+    Input[Keyboard / sliders] --> ADC[ADC-like readings]
+    ADC --> Game[C game state and framebuffer]
+    Game --> Scan[RGB bit-plane scanout]
+    Scan --> HAL[panel.h]
+    HAL --> Emulator[192-bit register and latch]
+    Emulator --> Canvas[WASM memory to canvas]
+    HAL --> Hardware[STM32 GPIO driver]
 ```
 
-## Hardware build notes (STM32)
+[game.c](src/game.c) owns the 32×32 character-colour framebuffer, paddle calibration, ball motion, collisions, scoring and start/play/serve/win states. It depends only on [panel.h](src/panel.h) for input, timing and output. The linker selects either the browser or STM32 implementation.
 
-The coursework hardware build uses `hardware/Makefile` and `libopencm3`.
+The software protocol uses **zero-based row addresses 0–15**, each selecting row `r` and `r+16`. For each pair the game shifts 32 red, 32 green and 32 blue bits for the top row, then the same for the bottom: **192 bits per latch, 3,072 bits per full refresh**. The register retains the newest 192 bits in a circular buffer. Shifting alone cannot change the latched framebuffer; `LatchRegister` decodes the register at the selected row. No zero-clear pass is needed before overwriting all 192 bits.
 
-Typical workflow (as described in the write-up):
+The C bridge passes the current `HEAPU8` view alongside the framebuffer pointer to JavaScript. This avoids depending on incidental global heap exports and refreshes the view after WebAssembly memory growth. JavaScript reads those pixels into a reused `ImageData` buffer; it does not independently simulate paddles or collisions.
 
-```bash
-make
-st-flash --reset write ledpanel.bin 0x8000000
-```
+`emscripten_sleep` and Asyncify let an embedded-style loop yield to the browser event loop. This keeps the shared C control flow simple, at the cost of transformed code and approximate timing. A callback-driven update loop would reduce that machinery but require restructuring the game. The UI counter is explicitly **row latches per second**, not full-frame FPS. Browser scheduling and the uncalibrated hardware delay prevent a reliable real-time performance claim.
 
-Note: the provided `Makefile` references additional build system files (e.g. `rules.mk`, `OPENCM3_DIR`) that are usually supplied by the coursework environment.
+## What is verified
 
-## Summary of the development process
+Native tests compile with `-Wall -Wextra -Werror` and **AddressSanitizer plus UndefinedBehaviorSanitizer**. They check exact RGB bit positions, 192-bit scan payloads, all 16 addresses, register overflow, latch visibility, row isolation and clearing. Game regressions cover ADC extremes, paddle near-misses, collision direction, serve velocity reset, clipped drawing, invalid glyphs and the winner surviving later animation ticks. The JavaScript test checks ADC mapping, step tokens and rendering from an explicit heap view.
 
-- **Reverse-engineered** the LED panel’s refresh protocol (row multiplexing + shift register + latch timing) and joystick ADC usage.
-- **Separated concerns** by designing a clean HAL (`panel.h`) so the *same* game logic could run on both hardware and the web.
-- **Built a faithful emulator** rather than a shortcut framebuffer API:
-  - Emulated the shift register contents and only updated the framebuffer on latch.
-  - Added scan-debug visualisation to spot ordering/timing mistakes.
-- **Ported timing/input to the browser**:
-  - Used `emscripten_sleep` + Asyncify to avoid blocking the UI thread.
-  - Mapped joystick sliders/keys to realistic ADC ranges to preserve calibration assumptions.
+The 2026 revision fixes an uninitialised winner variable, stale vertical velocity between serves, false paddle collisions outside the visible paddle, a missing boolean grouping in serve logic and undefined colour/glyph lookup behavior. It bounds framebuffer writes and gives the long-running cycle counter unsigned wraparound semantics. On the browser side it fixes pointer-event handling, clears held keys after focus loss, labels sliders, preserves visible keyboard focus, prevents arrow-key page scrolling during play and labels the previous “Start” control according to its actual resume behavior.
 
-## What I learned (technical)
+It also corrects the emulator's previous one-based row offset to match the hardware driver's raw address bits, removes misleading comments and dead debug code and makes the browser build self-contained. The original report and Git history remain the record of the coursework; current tests and repairs are subsequent improvements.
 
-- How multiplexed LED matrices work in practice: **row addressing**, **shift-register chains** and why the **bit order** and **latch timing** are everything.
-- How to design an interface that survives multiple targets: a small, stable HAL made it possible to keep `game.c` unchanged.
-- How to make embedded-style delays work in a browser: **Asyncify** + `emscripten_sleep` enables cooperative timing without freezing the page.
-- How to debug hardware protocols faster by building tooling: the scan-row visualisation is essentially an “oscilloscope view” for panel refresh.
+## Physical hardware and scope
 
----
+This is a **software protocol emulator**, not a cycle-accurate electrical model. The browser verifies the RGB-plane convention used by the game. The lab handout describes a different physical colour-chain ordering and the actual kit's chain direction, latch polarity and address wiring have not been revalidated. The former claim of exact hardware fidelity was stronger than the evidence supported.
 
-### Missing files / artefacts
+The STM32 build still needs the missing coursework `rules.mk`, a built libopencm3 checkout and an ARM toolchain; [hardware/README.md](hardware/README.md) explains the concrete prerequisites. Its delay loop is not a millisecond timer and ADC setup/calibration needs a hardware pass. The Makefile now finds the shared game source and reports missing prerequisites, but no working firmware binary is claimed.
 
-If you expected other coursework-provided files (e.g. `rules.mk` for STM32 builds) or a pre-built `pong.wasm` to be committed for instant demo, upload them and they can be dropped into this structure without changing any source.
+The game uses fixed geometry, global state and discrete per-tick collision checks. That is manageable for this small program; a variable-speed physics engine would need swept collisions or a smaller integration step to avoid tunnelling. The integrated browser framebuffer also does not model duty-cycle brightness, PWM, ghosting or GPIO timing. Those are useful boundaries to discuss in an interview: the emulator tests the software's register contract, while the physical device requires separate measurements.
