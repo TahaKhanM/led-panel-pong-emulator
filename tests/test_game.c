@@ -7,10 +7,11 @@
 #undef main
 
 static int bits[192], pushed, latched, row;
+static uint32_t input = 330;
 void setupPanel(void) {}
 void setupInput(void) {}
 void delay_ms(uint32_t ms) { (void)ms; }
-uint32_t getRawInput(int channel) { (void)channel; return 330; }
+uint32_t getRawInput(int channel) { (void)channel; return input; }
 void PrepareLatch(void) { pushed = 0; }
 void PushBit(int bit) { assert(pushed < 192); bits[pushed++] = bit; }
 void SelectRow(int r) { row = r; }
@@ -43,6 +44,20 @@ int main(void) {
   winScreen(); assert(winnerNumber == 0);
   cycle = 120; winScreen(); assert(winnerNumber == 0);
   lScore = 1; rScore = 10; newMode = true; winScreen(); assert(winnerNumber == 1);
+  /* Complete start/play/point/serve transitions use the real game functions. */
+  lScore = rScore = 0; gameMode = 0; newMode = true; input = 555;
+  startScreen(); startScreen(); assert(gameMode == 1 && newMode);
+  mainGame(); assert(!newMode);
+  ballX = panelWidth; mainGame(); assert(lScore == 1 && gameMode == 2 && newMode);
+  input = 330; mainGame(); assert(gameMode == 2 && !newMode);
+  input = 555; mainGame(); assert(gameMode == 1);
+  for (int tick = 0; tick < 10000; tick++) {
+    input = tick % 200 < 100 ? 555 : 105;
+    if (gameMode == 0) startScreen();
+    else if (gameMode == 3) winScreen();
+    else mainGame();
+    cycle++;
+  }
   /* Wrap-safe unsigned elapsed ticks. */
   cycle = UINT32_MAX; cycle++; assert(cycle == 0);
   puts("game checks passed");
